@@ -84,6 +84,63 @@ position_comparison['差額'] = position_comparison['收款金額'] - position_c
 merged_totals = merged_totals.sort_values('日期')
 position_comparison = position_comparison.sort_values(['日期', '位置編號'])
 
+# 在準備詳細資料之前，先清理桌號格式
+def clean_table_number(table_num):
+    if pd.isna(table_num):
+        return table_num
+    return str(table_num).strip().replace(' ', '').replace('　', '')
+
+# 清理A表和B表的桌號
+df_a['桌號'] = df_a['桌號'].apply(clean_table_number)
+df_b['臺位'] = df_b['臺位'].apply(clean_table_number)
+
+# 準備A表的詳細資料
+a_details = df_a.groupby(['營業日期', '桌號']).agg({
+    '付款方式': lambda x: '、'.join(x.dropna().astype(str).unique()),
+    '付款金額': 'sum',
+    '發票號碼': lambda x: '、'.join(x.dropna().astype(str).unique()),
+    '收款金額': 'sum',
+    '未稅': 'sum',
+    '稅額': 'sum'
+}).reset_index()
+
+# 準備B表的詳細資料
+b_details = df_b.groupby(['營業日期', '臺位']).agg({
+    '餐飲類別': lambda x: '、'.join(x.dropna().astype(str).unique()),
+    '品名': lambda x: '、'.join(x.dropna().astype(str).unique()),
+    '單位': lambda x: '、'.join(x.dropna().astype(str).unique()),
+    '銷售數量': 'sum',
+    '銷售金額': 'sum'
+}).reset_index()
+
+# 將B表的'臺位'改名為'桌號'以便合併
+b_details = b_details.rename(columns={'臺位': '桌號'})
+
+# 合併A表和B表的詳細資料
+detailed_comparison = pd.merge(
+    a_details,
+    b_details,
+    on=['營業日期', '桌號'],
+    how='outer'
+)
+
+# 處理空值
+# 數值欄位填0，文字欄位填空字串
+numeric_columns = ['付款金額', '收款金額', '未稅', '稅額', '銷售數量', '銷售金額']
+text_columns = ['付款方式', '發票號碼', '餐飲類別', '品名', '單位']
+
+for col in numeric_columns:
+    detailed_comparison[col] = detailed_comparison[col].fillna(0)
+for col in text_columns:
+    detailed_comparison[col] = detailed_comparison[col].fillna('')
+
+# 計算金額差異
+detailed_comparison['金額是否相符'] = (detailed_comparison['收款金額'] == detailed_comparison['銷售金額'])
+detailed_comparison['差額'] = detailed_comparison['收款金額'] - detailed_comparison['銷售金額']
+
+# 排序結果
+detailed_comparison = detailed_comparison.sort_values(['營業日期', '桌號'])
+
 # 將結果存入Excel的不同分頁
 with pd.ExcelWriter("comparison_result.xlsx") as writer:
     # 第一個分頁：只有日期總額對照
@@ -91,9 +148,14 @@ with pd.ExcelWriter("comparison_result.xlsx") as writer:
     
     # 第二個分頁：同一天同一位置的詳細比對
     position_comparison.to_excel(writer, sheet_name='位置明細比對', index=False)
+    
+    # 第三個分頁：詳細資訊比對
+    detailed_comparison.to_excel(writer, sheet_name='詳細資訊比對', index=False)
 
 # 顯示結果
 print("\n=== 日期總額比對 ===")
 print(merged_totals)
 print("\n=== 位置明細比對 ===")
 print(position_comparison)
+print("\n=== 詳細資訊比對 ===")
+print(detailed_comparison)
